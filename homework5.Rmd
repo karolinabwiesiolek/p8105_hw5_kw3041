@@ -1,0 +1,244 @@
+---
+title: "homework5_kw3041"
+output: html_document
+date: "2025-11-11"
+---
+
+```{r}
+library(tidyverse)
+library(broom)
+```
+
+## Problem 1. 
+# Function to test if there are duplicate birthdays in a group
+
+
+```{r}
+birthday_duplicate = function(n_people) {
+  birthdays = sample(1:365, n_people, replace = TRUE)
+  return(length(unique(birthdays)) < n_people)
+}
+```
+
+```{r}
+set.seed(123)  
+n_sim = 10000
+group_sizes = 2:50
+
+results = tibble(
+  group_size = group_sizes,
+  prob_shared_birthday = map_dbl(group_sizes, function(n) {
+    mean(replicate(n_sim, birthday_duplicate(n)))
+  })
+)
+```
+
+
+```{r}
+results %>%
+  ggplot(aes(x = group_size, y = prob_shared_birthday)) +
+  geom_line(size = 1) +
+  geom_point() +
+  labs(
+    title = "Probability that at least two people share a birthday",
+    x = "Group size (number of people)",
+    y = "Probability"
+  ) +
+  theme_minimal()
+
+print(results)
+```
+
+Interpretation:
+The plot shows the classic birthday paradox: even for relatively small group sizes, the probability that at least two people share a birthday increases rapidly.
+
+At n ≈ 23, the probability is already around 50%.
+
+By the time we reach n = 40–50, the probability of a shared birthday is very close to 1 and at aorund n = 40 the plot platoes. 
+
+Despite intuition suggesting collisions should be rare, the number of possible pairs grows quadratically with group size, which makes duplicates increasingly likely even when birthdays are uniformly distributed.
+
+
+## Problem 2 
+
+
+```{r}
+n = 30
+sigma = 5
+mu_values = 0:6
+n_sim = 5000
+```
+
+
+
+```{r}
+set.seed(123)
+
+results = expand_grid(mu = mu_values, sim = 1:n_sim) |>
+  mutate(
+    x = map(mu, ~ rnorm(n, mean = .x, sd = sigma)),
+    test = map(x, ~ t.test(.x, mu = 0)),
+    tidy = map(test, broom::tidy)
+  ) |>
+  unnest(tidy) |>
+  select(mu, estimate, p.value)
+```
+
+
+```{r}
+power_summary = results |>
+  group_by(mu) |>
+  summarise(power = mean(p.value < 0.05))
+```
+
+
+```{r}
+power_summary |>
+  ggplot(aes(x = mu, y = power)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Power of one-sample t-test",
+    x = "True mean (μ)",
+    y = "Probability of rejecting H₀ (Power)"
+  ) +
+  theme_minimal()
+```
+
+Averagning stimtaes:
+```{r}
+estimates_summary = results |>
+  group_by(mu) |>
+  summarise(
+    mean_est_all = mean(estimate),
+    mean_est_reject = mean(estimate[p.value < 0.05])
+  )
+```
+
+
+```{r}
+estimates_summary |>
+  ggplot(aes(x = mu)) +
+  geom_line(aes(y = mean_est_all, color = "All samples"), size = 1) +
+  geom_line(aes(y = mean_est_reject, color = "Rejected H₀ only"), size = 1) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  labs(
+    title = "Average estimated μ̂ vs true μ",
+    x = "True mean (μ)",
+    y = "Average estimated mean (μ̂)",
+    color = "Condition"
+  ) +
+  theme_minimal()
+```
+
+Power vs Effect Size:
+As the true mean μ increases, the probability of rejecting the null hypothesis (power) also increases. When μ = 0, power ≈ 0.05, as expected under a true null (Type I error rate).
+
+Larger effect sizes (μ ≥ 3) show power approaching 1. This relationship occurs because stronger true effects shift the sampling distribution further away from 0, making it more likely that the t-test detects the difference.
+
+Bias in Estimates When Conditioning on Rejection:
+The first line in the plot (all samples) shows that mean(μ̂) is approximately equal to the true μ for each effect size, as expected, since the estimator is unbiased. However, the second line (estimate only for samples where H₀ was rejected) lies above the 1:1 line, especially for small effect sizes.
+
+What it means is that:
+When the true effect is small (e.g., μ = 1 or 2), the only datasets that produce significant results tend to be those where random noise pushes the estimate upward.
+Conditioning on significance produces inflated effect size estimates — a phenomenon known as the winner’s curse or Type M error (magnitude error).
+
+For large μ, this bias disappears because nearly all samples reject H₀.
+
+
+## Problem 3 
+
+```{r}
+homicide_data <- read_csv("https://raw.githubusercontent.com/washingtonpost/data-homicides/master/homicide-data.csv")
+```
+
+
+
+# Raw data description
+glimpse(homicide_data)
+# Columns include:
+# uid (unique case id), reported_date, victim_last, victim_first, victim_age, victim_race, victim_sex,
+# city, state, lat, lon, disposition
+# Each row = 1 homicide case
+
+# city_state variable 
+```{r}
+homicide_data = homicide_data |>
+  mutate(city_state = str_c(city, ", ", state))
+```
+
+# Summary within cities 
+```{r}
+city_summary = homicide_data |>
+  group_by(city_state) |>
+  summarise(
+    total = n(),
+    unsolved = sum(disposition %in% c("Closed without arrest", "Open/No arrest"))
+  )
+```
+
+
+
+# Baltimore, MD
+```{r}
+baltimore = filter(city_summary, city_state == "Baltimore, MD")
+
+baltimore_test = prop.test(baltimore$unsolved, baltimore$total)
+baltimore_tidy = broom::tidy(baltimore_test)
+
+baltimore_tidy |>
+  select(estimate, conf.low, conf.high)
+```
+
+
+# Prop test for all cities 
+```{r}
+city_results = city_summary |>
+  mutate(
+    test = map2(unsolved, total, ~ binom.test(.x, .y)),  
+    tidy = map(test, broom::tidy)
+  ) |>
+  unnest(tidy) |>
+  select(city_state, estimate, conf.low, conf.high) |>
+  arrange(desc(estimate))
+
+```
+
+# Plot - proportion of unsolved homicides with 95% CI 
+```{r}
+city_results |>
+  ggplot(aes(
+    x = reorder(city_state, estimate),
+    y = estimate
+  )) +
+  geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+  coord_flip() +
+  labs(
+    title = "Proportion of Unsolved Homicides in 50 U.S. Cities",
+    x = "City",
+    y = "Estimated Proportion Unsolved (95% CI)"
+  ) +
+  theme_minimal()
+```
+
+Description of the Raw Data:
+The Washington Post homicide dataset contains 52,179 homicide cases from 50 major U.S. cities. Each row corresponds to a single homicide and includes:
+- Victim information (first/last name, age, race, sex)
+- Location information (city, state, latitude, longitude)
+- Reported date
+- Case disposition (e.g., “Closed by arrest”, “Open/No arrest”)
+The dataset allows city-level summaries of total and unsolved cases.
+
+Baltimore Interpretation:
+Based on prop.test, the estimated proportion of homicides that are unsolved in Baltimore is about 0.646, with a 95% CI of roughly 0.628–0.663.
+This means that about two-thirds of homicide cases in Baltimore remain open or were closed without an arrest.
+
+Interpretation of Citywide Results:
+The plot comparing all cities shows:
+- variability between cities in the proportion of unsolved homicides
+- some cities have unsolved rates below 40%, while others exceed 70%
+- Cities appear ordered from most to least unsolved, improving readability
+
+These differences may reflect variation in investigative resources, policing strategies, crime reporting systems, or social/environmental factors.
+
